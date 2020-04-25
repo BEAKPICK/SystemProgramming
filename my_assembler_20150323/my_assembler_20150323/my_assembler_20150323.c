@@ -622,6 +622,7 @@ void make_symboltab_literaltab()
 			tempLocCtr = 0;
 			symIndexer += 1;
 			literalIndexer += 1;
+			tempLiteralIndex += 1;
 		}
 
 		/*locSize를 구하는 과정 하지만 중간에 =.''형태가 있다면 리터럴테이블에 넣어주기*/
@@ -738,7 +739,7 @@ void make_symboltab_literaltab()
 
 /* ----------------------------------------------------------------------------------
 * 설명 : 검출한 리터럴이 중복되어 테이블에 들어가는 것을 방지하기 위해 해당 리터럴이
-*	테이블에 있는 지에 대한 여부를 확인하는 함수, 인덱스를 반환하는 방식으로 구현.
+	테이블에 있는 지에 대한 여부를 확인하는 함수, 인덱스를 반환하는 방식으로 구현.
 * 매개 : 리터럴
 * 반환 : 인덱스 >= 0, 결과없음 < 0
 * 주의 : 없음
@@ -753,6 +754,7 @@ int search_literal_table(char* literal, int sectionIndex)
 		if (strcmp(literal_table[i].literal,"")==0)
 		{
 			tempSectionIndex += 1;
+			if (tempSectionIndex > sectionIndex) return -1;
 			continue;
 		}
 		if (strcmp(literal_table[i].literal, literal) == 0 && tempSectionIndex==sectionIndex) return i;
@@ -802,6 +804,7 @@ int search_sym_table(char* symbol, int sectionIndex)
 		if (strcmp(sym_table[i].symbol, "") == 0) 
 		{
 			tempSectionIndex+=1;
+			if (tempSectionIndex > sectionIndex) return result;
 			continue;
 		}
 		if (strcmp(sym_table[i].symbol, tmpStr) == 0)
@@ -946,8 +949,8 @@ static int assem_pass2(void)
 	int sectionIndex = 0;
 	int tempLocCtr = 0, tempLocSize = 0;
 	int tempSearchIndex = 0;
-	int mask = 255;
-	int mask2 = 15;
+	int mask = 255;	//값을 계산한 뒤 마스킹을 해서 정확한 결과가 나오게 하기 위함
+	int mask2 = 15;	//값을 계산한 뒤 마스킹을 해서 정확한 결과가 나오게 하기 위함
 	int direction = 0;
 	/*direction으로 과정을 통제하였다.*/
 	int mark = 0;
@@ -1042,7 +1045,7 @@ static int assem_pass2(void)
 			/*operand에 #이 없는 애들을 처리하는 과정*/
 			else
 			{
-				/*타입 3이상은 1개 이상의 operand를 가진다*/
+				/*타입 3이상은 1개 이상의 operand를 가진다 하지만 이때는 RSUB의 존재를 간과하고 있었다...*/
 				tempSearchIndex = search_sym_table(token_table[i]->operand[0], sectionIndex);
 				/*심볼테이블에 검색되는 operand를 가졌다면*/
 				if (tempSearchIndex >= 0)
@@ -1060,7 +1063,7 @@ static int assem_pass2(void)
 						fourByteUnit[2] += (sym_table[tempSearchIndex].addr - tempLocCtr) & mask;
 					}
 				}
-				/*심볼테이블에 검색되지 않는다면 리터럴을 생각해본다. 리터럴 처리를 여기서 해준다.*/
+				/*심볼테이블에 검색되지 않는다면 리터럴은 아닐 지 검사해본다. 리터럴 처리를 여기서 해준다.*/
 				else if (token_table[i]->operand[0] != NULL && token_table[i]->operand[0][0] == '=')
 				{
 					strcpy(tempStr, token_table[i]->operand[0]);
@@ -1089,8 +1092,8 @@ static int assem_pass2(void)
 					if (token_table[i]->operand[0] == NULL || token_table[i]->operand[0] == " "
 						|| tempSearchIndex == -1)
 					{
-						/*operand가 아예 없거나 인위적으로 없게 한 것이나 미리 스캔하여 만들어놓은 심볼테이블에 아예 없어도...
-						어쩔 수 없다...RSUB은 따로 검사해주자...덕분에 코드가 매우 더러워졌다.*/
+						/*operand가 아예 없거나 인위적으로 없게 한 것이나 미리 스캔하여 만들어놓은 심볼테이블에 아예 없어도...RSUB은 다 빠져나간다.
+						어쩔 수 없다...RSUB은 따로 검사해주자...RSUB이면 외부참조테이블에 들어가서는 안된다. 덕분에 코드가 매우 더러워졌다.*/
 						if (strcmp(token_table[i]->operator, "RSUB") == 0) direction = 1;
 						else direction = 0;
 					}
@@ -1112,7 +1115,7 @@ static int assem_pass2(void)
 					}
 				}
 			}
-			/*결국엔 모두 저장을 해야되는데 direction변수를 이용해서 중간과정들을 통제하여 여기까지 인도하도록 한다.*/
+			/*결국엔 작업했던 3byte 혹은 4byte 머신코드를 모두 저장을 해야되는데 direction변수를 이용해서 중간과정들을 통제하여 여기까지 인도하도록 한다.*/
 			if (tempLocSize == 3)
 			{
 				machine_code_table[machineCodeIndexer] = malloc(sizeof(machine_code_table));
@@ -1205,39 +1208,6 @@ static int assem_pass2(void)
 				if(tempIndex<0) save_ext_ref_table(i, sectionIndex, tempLocCtr-set_addr_size(i), 3);
 				else *machine_code_table[machineCodeIndexer]->machine_code = sym_table[tempIndex].addr;
 			}
-
-			/*주소를 확인해서 처리해줘야할 리터럴이 존재할 경우 머신코드에 넣어주기. 출력 순서를 지키기 위해 마련한 방법*/
-			//for (int t = 0; t < MAX_LINES; t++)
-			//{
-			//	if (strcmp(literal_table[t].literal, "") == 0) break;
-			//	if (literal_table[t].addr == tempLocCtr && literal_table[t].check == 0)
-			//	{
-			//		if (tempLocCtr - set_addr_size(i) - mark > 0)
-			//		{
-			//			/*출력을 할 때 여기서 추가된 기계어 코드는 분리가 되어 출력이 되기 때문에 머신코드테이블 중간에 차이값을 두어 출력이 용이하게 만든다.*/
-			//			machine_code_table[machineCodeIndexer] = malloc(sizeof(machine_code_table));
-			//			machine_code_table[machineCodeIndexer]->length = malloc(sizeof(int));
-			//			machine_code_table[machineCodeIndexer]->machine_code = NULL;
-			//			*machine_code_table[machineCodeIndexer]->length = tempLocCtr - set_addr_size(i) - mark;
-
-			//			machineCodeIndexer += 1;
-			//		}
-			//		
-			//		machine_code_table[machineCodeIndexer] = malloc(sizeof(machine_code_table));
-			//		machine_code_table[machineCodeIndexer]->length = malloc(sizeof(int));
-			//		machine_code_table[machineCodeIndexer]->machine_code = malloc(sizeof(int));
-			//		*machine_code_table[machineCodeIndexer]->machine_code = 0;
-
-			//		sprintf(tempStr, "%X", (int)literal_table[t].literal[0]);
-			//		sprintf(tempStr + 2, "%X", (int)literal_table[t].literal[1]);
-			//		sprintf(tempStr + 4, "%X", (int)literal_table[t].literal[2]);
-			//		*machine_code_table[machineCodeIndexer]->length = (int)strlen(tempStr) / 2;
-			//		*machine_code_table[machineCodeIndexer]->machine_code = (int)strtol(tempStr, NULL, 16);
-			//		machineCodeIndexer += 1;
-			//		literal_table[t].check = 1;
-			//		break;
-			//	}
-			//}
 		}
 		/*주소를 확인해서 처리해줘야할 리터럴이 존재할 경우 머신코드에 넣어주기. 출력 순서를 지키기 위해 마련한 방법*/
 		for (int t = 0; t < MAX_LINES; t++)
@@ -1246,6 +1216,7 @@ static int assem_pass2(void)
 			if (search_literal_table(literal_table[t].literal, sectionIndex) < 0) continue;
 			if ((literal_table[t].addr == tempLocCtr && literal_table[t].check == 0) || direction == -1)
 			{
+				/*만약 주소가 이어져있지 않고 떨어져 나온 머신코드가 존재할 때는 머신코드의 코드는 NULL 그리고 length는 띄어져있는 거리만큼 계산해 넣는다.*/
 				if (tempLocCtr - set_addr_size(i) - mark - tempLocSize > 0)
 				{
 					/*출력을 할 때 여기서 추가된 기계어 코드는 분리가 되어 출력이 되기 때문에 머신코드테이블 중간에 차이값을 두어 출력이 용이하게 만든다.*/
@@ -1318,7 +1289,7 @@ int register_number(char* r)
 * 설명 : 출력을 도와주는 함수, 원하는 문자열을 찾아준다.
 * 매개 : 섹션이 시작하는 인덱스, 찾고 싶은 문자열
 * 반환 : 찾고자 하는 문자열이 존재하는 인덱스, 값없음 < 0
-* 주의 : operator만 찾을 수 있다. 중복되었을 때 가장 앞에 있는 값을 찾아온다.
+* 주의 : operator만 찾을 수 있다. 중복된 내용이 있어도 무조건 가장 앞에 있는 값을 찾아온다.
 * ----------------------------------------------------------------------------------
 */
 int search_operator_in_token_table(int index, char* str)
